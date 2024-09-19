@@ -12,6 +12,8 @@
 #include "common/util.h"
 #include "common/swaglog.h"
 #include "system/camerad/cameras/spectra.h"
+#include "system/camerad/cameras/isp_programs.h"
+
 
 // For debugging:
 // echo "4294967295" > /sys/module/cam_debug_util/parameters/debug_mdl
@@ -418,6 +420,19 @@ void SpectraCamera::config_isp(int io_mem_handle, int fence, int request_id, int
   {
     pkt->kmd_cmd_buf_index = 0;
     pkt->kmd_cmd_buf_offset = 0;
+
+    unsigned char* isp_prog;
+    if (io_mem_handle == 0) {
+      buf_desc[0].length = sizeof(isp_prog1)-1;
+      isp_prog = isp_prog1;
+    } else {
+      buf_desc[0].length = sizeof(isp_prog2)-1;
+      isp_prog = isp_prog2;
+    }
+    printf("isp program length %d\n", buf_desc[0].length);
+    memcpy((unsigned char*)buf0_ptr + buf0_offset, isp_prog, buf_desc[0].length);
+    //pkt->kmd_cmd_buf_offset = buf_desc[0].length;
+    //pkt->kmd_cmd_buf_index = 0;
   }
 
   // *** patches ***
@@ -460,9 +475,9 @@ void SpectraCamera::config_isp(int io_mem_handle, int fence, int request_id, int
     tmp.type_0 |= sizeof(cam_isp_resource_hfr_config) << 8;
     static_assert(sizeof(cam_isp_resource_hfr_config) == 0x20);
     tmp.resource_hfr = {
-      .num_ports = 1,  // 10 for YUV (but I don't think we need them)
+      .num_ports = 1,
       .port_hfr_config[0] = {
-        .resource_type = CAM_ISP_IFE_OUT_RES_RDI_0, // CAM_ISP_IFE_OUT_RES_FULL for YUV
+        .resource_type = CAM_ISP_IFE_OUT_RES_FULL,
         .subsample_pattern = 1,
         .subsample_period = 0,
         .framedrop_pattern = 1,
@@ -518,6 +533,7 @@ void SpectraCamera::config_isp(int io_mem_handle, int fence, int request_id, int
     struct cam_buf_io_cfg *io_cfg = (struct cam_buf_io_cfg *)((char*)&pkt->payload + pkt->io_configs_offset);
     io_cfg[0].offsets[0] = 0;
     io_cfg[0].mem_handle[0] = io_mem_handle;
+    io_cfg[0].mem_handle[1] = io_mem_handle;
 
     io_cfg[0].planes[0] = (struct cam_plane_cfg){
       .width = sensor->frame_width,
@@ -535,11 +551,11 @@ void SpectraCamera::config_isp(int io_mem_handle, int fence, int request_id, int
       .h_init = 0x0,
       .v_init = 0x0,
     };
-    io_cfg[0].format = sensor->mipi_format;                    // CAM_FORMAT_UBWC_TP10 for YUV
-    io_cfg[0].color_space = CAM_COLOR_SPACE_BASE;          // CAM_COLOR_SPACE_BT601_FULL for YUV
-    io_cfg[0].color_pattern = 0x5;                         // 0x0 for YUV
-    io_cfg[0].bpp = (sensor->mipi_format == CAM_FORMAT_MIPI_RAW_10 ? 0xa : 0xc);  // bits per pixel
-    io_cfg[0].resource_type = CAM_ISP_IFE_OUT_RES_RDI_0;   // CAM_ISP_IFE_OUT_RES_FULL for YUV
+    io_cfg[0].format = sensor->mipi_format;
+    io_cfg[0].color_space = CAM_COLOR_SPACE_BASE;
+    io_cfg[0].color_pattern = 0x5;
+    io_cfg[0].bpp = 0;  // bits per pixel
+    io_cfg[0].resource_type = CAM_ISP_IFE_OUT_RES_FULL;
     io_cfg[0].fence = fence;
     io_cfg[0].direction = CAM_BUF_OUTPUT;
     io_cfg[0].subsample_pattern = 0x1;
@@ -696,8 +712,8 @@ void SpectraCamera::configISP() {
     // ISP outputs
     .num_out_res = 0x1,
     .data[0] = (struct cam_isp_out_port_info){
-      .res_type = CAM_ISP_IFE_OUT_RES_RDI_0,
-      .format = sensor->mipi_format,
+      .res_type = CAM_ISP_IFE_OUT_RES_FULL,
+      .format = CAM_FORMAT_NV12,
       .width = sensor->frame_width,
       .height = sensor->frame_height + sensor->extra_height,
       .comp_grp_id = 0x0, .split_point = 0x0, .secure_mode = 0x0,
@@ -717,9 +733,9 @@ void SpectraCamera::configISP() {
 
   // config ISP
   // TODO: unclear where this 15 comes from
-  alloc_w_mmu_hdl(m->video0_fd, 15*ALIGNED_SIZE(buf0_size, buf0_alignment), (uint32_t*)&buf0_handle, buf0_alignment,
-                  CAM_MEM_FLAG_HW_READ_WRITE | CAM_MEM_FLAG_KMD_ACCESS | CAM_MEM_FLAG_UMD_ACCESS | CAM_MEM_FLAG_CMD_BUF_TYPE,
-                  m->device_iommu, m->cdm_iommu);
+  buf0_ptr = alloc_w_mmu_hdl(m->video0_fd, 15*ALIGNED_SIZE(buf0_size, buf0_alignment), (uint32_t*)&buf0_handle, buf0_alignment,
+                             CAM_MEM_FLAG_HW_READ_WRITE | CAM_MEM_FLAG_KMD_ACCESS | CAM_MEM_FLAG_UMD_ACCESS | CAM_MEM_FLAG_CMD_BUF_TYPE,
+                            m->device_iommu, m->cdm_iommu);
   config_isp(0, 0, 1, 0);
 }
 
